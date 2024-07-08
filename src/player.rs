@@ -1,5 +1,6 @@
 use crate::hand;
 
+#[derive(Clone, PartialEq)]
 pub struct Player {
     pub hand: hand::Hand,
     pub name: String,
@@ -8,12 +9,8 @@ pub struct Player {
 
 impl Player {
     pub fn new(name: String) -> Self {
-        let mut hand = hand::Hand::new();
+        let hand = hand::Hand::new();
         let score = 0u16;
-        Self {
-            hand,
-            name,
-            score
-        }
+        Self { hand, name, score }
     }
 }

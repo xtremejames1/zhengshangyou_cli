@@ -1,5 +1,6 @@
 use crate::card;
 
+#[derive(Clone, PartialEq)]
 pub struct Hand {
     pub cards: Vec<card::Card>,
 }

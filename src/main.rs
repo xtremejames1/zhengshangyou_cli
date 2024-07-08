@@ -3,6 +3,9 @@ pub mod deck;
 pub mod hand;
 pub mod play;
 pub mod player;
+pub mod game;
+pub mod round;
+pub mod display;
 
 use std::num::IntErrorKind;
 
@@ -25,30 +28,30 @@ fn main() {
 
     println!("All players added.");
 
-    // pick random player to start, give them a 3 of hearts as standard in the game
-    let index = (rand::random::<f32>() * players.len() as f32).floor() as usize;
-    players[index].hand.add_card(deck.cards.remove(deck.cards.binary_search(&card::Card::new(card::Suit::Hearts, card::Rank::Three)).expect("REASON")));
+    let mut game = game::Game::new(players, deck);
 
-    println!("{} will start first.", players[index].name);
+    game.start_game();
+    game.end_game();
 
-    // deal the rest of the cards
-    while !deck.is_empty() {
-        for player in &mut players {
-            if deck.is_empty() { break; }
-            player.hand.add_card(deck.draw_card());
-        }
-    }
 
-    // list all hands
-    for player in &mut players {
-        player.hand.sort(); // sort the players hand
-        println!("{}'s hand: ", player.name);
-        for card in &player.hand.cards {
-            print!("{} ",card);
-        }
-        println!();
-    }
+    //
+    // display_game(&players);
+    //
+    // // list all hands
+    // for player in &mut players {
+    //     player.hand.sort(); // sort the players hand
+    //     println!("{}'s hand: ", player.name);
+    //     for card in &player.hand.cards {
+    //         print!("{} ",card);
+    //     }
+    //     println!();
+    // }
+    //
+    // // move
+    // print_events();
+    // println!("done")
 }
+
 
 fn input_u32( prompt: String, subject: String ) -> u32 {
     let mut line = String::new();
