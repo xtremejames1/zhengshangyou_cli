@@ -1,6 +1,6 @@
+use std::cmp::Ordering;
 use std::fmt;
 use strum_macros::EnumIter;
-use std::cmp::Ordering;
 
 #[derive(Clone, Eq)]
 pub struct Card {
@@ -10,10 +10,7 @@ pub struct Card {
 
 impl Card {
     pub fn new(suit: Suit, rank: Rank) -> Self {
-        Self {
-            suit,
-            rank,
-        }
+        Self { suit, rank }
     }
 }
 
@@ -21,8 +18,7 @@ impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if &self.rank == &Rank::Joker {
             write!(f, "{:?} Joker", &self.suit)
-        }
-        else {
+        } else {
             let rank_str = match &self.rank {
                 Rank::Three => "3",
                 Rank::Four => "4",
@@ -76,7 +72,7 @@ pub enum Suit {
     Clubs,
     Hearts,
     Red,
-    Black
+    Black,
 }
 
 #[derive(EnumIter, Debug, Clone, PartialEq, Eq, Copy)]
@@ -94,5 +90,5 @@ pub enum Rank {
     King = 13,
     Ace = 14,
     Two = 15,
-    Joker = 16
+    Joker = 16,
 }

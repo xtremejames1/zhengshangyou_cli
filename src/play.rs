@@ -9,11 +9,10 @@ pub struct Play {
 }
 
 impl Play {
-    pub fn new(p: player::Player) -> Self {
+    pub fn new(player: player::Player) -> Self {
         let cards = Vec::new();
         let rank = card::Rank::Three; // set the rank to the lowest possible
         let class = Class::Invalid;
-        let player = p;
         Self {
             class,
             rank,
@@ -24,13 +23,15 @@ impl Play {
 
     pub fn set_cards(&mut self, cards: Vec<card::Card>) {
         self.cards = cards;
+        self.identify_play();
     }
 
     pub fn add_card(&mut self, c: card::Card) {
         self.cards.push(c);
+        self.identify_play();
     }
 
-    pub fn identify_play(&mut self) {
+    fn identify_play(&mut self) {
         self.class = identify_class(&mut self.cards);
         self.rank = identify_rank(&mut self.cards);
     }
@@ -137,7 +138,7 @@ fn straight(cards: &mut Vec<card::Card>) -> Class {
     Class::Invalid
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Class {
     Invalid,
     Single,

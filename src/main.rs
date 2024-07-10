@@ -1,29 +1,39 @@
 pub mod card;
 pub mod deck;
+pub mod display;
+pub mod game;
 pub mod hand;
 pub mod play;
 pub mod player;
-pub mod game;
 pub mod round;
-pub mod display;
 
-use std::num::IntErrorKind;
+use std::{collections::VecDeque, num::IntErrorKind};
 
 fn main() {
-    let num_decks = input_u32("How many decks would you like to play with?".to_string(), "decks".to_string());
-    let mut deck = deck::Deck::new(num_decks);
+    let num_decks = input_u32(
+        "How many decks would you like to play with?".to_string(),
+        "decks".to_string(),
+    );
 
-    let num_players = input_u32("How many players would you like to play with?".to_string(), "players".to_string());
-    println!("Starting game with {} players and {} decks.", num_players, num_decks);
+    let deck = deck::Deck::new(num_decks);
 
-    let mut players = Vec::new();
+    let num_players = input_u32(
+        "How many players would you like to play with?".to_string(),
+        "players".to_string(),
+    );
+    println!(
+        "Starting game with {} players and {} decks.",
+        num_players, num_decks
+    );
+
+    let mut players = VecDeque::new();
     for n in 0u32..num_players {
         let mut name = String::new();
 
-        println!("Player {}, enter your name :", n+1u32);
+        println!("Player {}, enter your name :", n + 1u32);
         std::io::stdin().read_line(&mut name).unwrap();
 
-        players.push(player::Player::new(name.trim().to_string()));
+        players.push_back(player::Player::new(name.trim().to_string()));
     }
 
     println!("All players added.");
@@ -32,7 +42,6 @@ fn main() {
 
     game.start_game();
     game.end_game();
-
 
     //
     // display_game(&players);
@@ -52,8 +61,7 @@ fn main() {
     // println!("done")
 }
 
-
-fn input_u32( prompt: String, subject: String ) -> u32 {
+fn input_u32(prompt: String, subject: String) -> u32 {
     let mut line = String::new();
     loop {
         println!("{}", prompt);
@@ -70,11 +78,9 @@ fn input_u32( prompt: String, subject: String ) -> u32 {
                     panic!("Unexpected error {error:?}")
                 }
             }
-        }
-        else if line.trim().parse::<u32>().unwrap() == 0 {
+        } else if line.trim().parse::<u32>().unwrap() == 0 {
             println!("Cannot play with zero {}.", subject);
-        }
-        else {
+        } else {
             break line.trim().parse().unwrap();
         }
         line.clear()
