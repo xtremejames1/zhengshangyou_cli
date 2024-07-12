@@ -35,13 +35,18 @@ fn main() {
             }
         }
         1 => {
-            let name = input_string("What is your name?".to_string());
+            let mut name: String;
+            loop {
+                name = input_string("What is your name?".to_string());
+                if !name.contains('/') {
+                    break;
+                }
+                println!("Username cannot contain \"/\". Please try again.")
+            }
             let ip_string = input_string("What IP would you like to connect to?".to_string());
             let mut client = client::Client::new(ip_string.parse().unwrap());
-            client.send(format!("name:{name}"));
+            client.send(format!("name:{name}\0"));
 
-            // TODO for some reason this blocks the thing from starting
-            // maybe cuz client goes out of scope?
             let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
             if start_game == 1 {
                 client.send("gamestart:".to_string());

@@ -101,20 +101,29 @@ impl Server {
 }
 
 fn validate_player(stream: &TcpStream) -> Option<String> {
-    let buf_reader = BufReader::new(stream);
-    println!("Created buffer");
-    let data: Vec<_> = buf_reader
-        .lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
+    let mut buf_reader = BufReader::new(stream);
 
-    println!("Read data");
+    let mut data = Vec::new();
+    buf_reader.read_until(b'\0', &mut data).ok()?;
 
-    let index = data.last().expect("No string found").find("name:");
-    println!("found name");
+    let data = String::from_utf8(data).expect("Invalid name");
 
-    let username = data.last()?.split_at(index.unwrap() + 5).1.to_string();
+    let index = data.find("name:")?;
+    let username = data.split_at(index + 5).1.trim().to_string();
+
+    Some(username)
+}
+
+fn check_start(stream: &TcpStream) -> bool {
+    let mut buf_reader = BufReader::new(stream);
+
+    let mut data = Vec::new();
+    buf_reader.read_until(b'\0', &mut data).ok()?;
+
+    let data = String::from_utf8(data).expect("Invalid name");
+
+    let index = data.find("name:")?;
+    let username = data.split_at(index + 5).1.trim().to_string();
 
     Some(username)
 }
