@@ -1,4 +1,5 @@
 pub mod card;
+pub mod client;
 pub mod deck;
 pub mod display;
 pub mod game;
@@ -6,10 +7,49 @@ pub mod hand;
 pub mod play;
 pub mod player;
 pub mod round;
+pub mod server;
 
-use std::{collections::VecDeque, num::IntErrorKind};
+use std::{collections::VecDeque, num::IntErrorKind, thread, time::Duration};
 
 fn main() {
+    // TODO change this to launch arg
+    let network_type = input_u32(
+        "Enter 1 for client, 2 for server".to_string(),
+        "bruh".to_string(),
+    );
+
+    match network_type {
+        2 => {
+            let mut server = server::Server::new();
+            server.accept_players();
+            // thread::sleep(Duration::from_secs(30));
+            // server.stop_accepting_players();
+            if server.players_streams.is_empty() {
+                println!("no players found on server");
+            }
+            for player in server.players_streams {
+                let player_name = player.0.name;
+                let player_ip = player.1.peer_addr().unwrap();
+                println!("name: {}", player_name);
+                println!("ip: {}", player_ip);
+            }
+        }
+        1 => {
+            let name = input_string("What is your name?".to_string());
+            let ip_string = input_string("What IP would you like to connect to?".to_string());
+            let mut client = client::Client::new(ip_string.parse().unwrap());
+            client.send(format!("name:{name}"));
+
+            // TODO for some reason this blocks the thing from starting
+            // maybe cuz client goes out of scope?
+            let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
+            if start_game == 1 {
+                client.send("gamestart:".to_string());
+            }
+        }
+        _ => {}
+    }
+
     let num_decks = input_u32(
         "How many decks would you like to play with?".to_string(),
         "decks".to_string(),
@@ -42,23 +82,6 @@ fn main() {
 
     game.start_game();
     game.end_game();
-
-    //
-    // display_game(&players);
-    //
-    // // list all hands
-    // for player in &mut players {
-    //     player.hand.sort(); // sort the players hand
-    //     println!("{}'s hand: ", player.name);
-    //     for card in &player.hand.cards {
-    //         print!("{} ",card);
-    //     }
-    //     println!();
-    // }
-    //
-    // // move
-    // print_events();
-    // println!("done")
 }
 
 fn input_u32(prompt: String, subject: String) -> u32 {
@@ -85,4 +108,17 @@ fn input_u32(prompt: String, subject: String) -> u32 {
         }
         line.clear()
     }
+}
+fn input_string(prompt: String) -> String {
+    let mut line = String::new();
+    loop {
+        println!("{}", prompt);
+        std::io::stdin().read_line(&mut line).unwrap();
+        if line.is_empty() {
+            println!("Input cannot be empty.");
+        } else {
+            break;
+        }
+    }
+    line.trim().to_string()
 }
