@@ -11,6 +11,8 @@ pub mod server;
 
 use std::{collections::VecDeque, num::IntErrorKind, thread, time::Duration};
 
+use display::announce_top_left;
+
 fn main() {
     // TODO change this to launch arg
     let network_type = input_u32(
@@ -20,18 +22,56 @@ fn main() {
 
     match network_type {
         2 => {
+            println!("Server started...");
+            display::init();
+            display::announce("Zheng Shang-You Server".to_string());
             let mut server = server::Server::new();
             server.accept_players();
-            // thread::sleep(Duration::from_secs(30));
-            // server.stop_accepting_players();
-            if server.players_streams.is_empty() {
-                println!("no players found on server");
-            }
-            for player in server.players_streams {
-                let player_name = player.0.name;
-                let player_ip = player.1.peer_addr().unwrap();
-                println!("name: {}", player_name);
-                println!("ip: {}", player_ip);
+
+            let mut player_names: Vec<String> = Vec::new();
+            let mut refresh = true;
+
+            loop {
+                if server.listener_thread.as_ref().unwrap().is_finished() {
+                    break;
+                }
+                let players_streams = server.players_streams.lock().unwrap();
+
+                if refresh {
+                    display::show_server_status(&players_streams);
+                    refresh = false;
+                }
+
+                //Refresh if different amount of names
+                if player_names.len() != players_streams.len() {
+                    refresh = true;
+                    if player_names.len() < players_streams.len() {
+                        for i in 0..players_streams.len() - player_names.len() {
+                            player_names.push(
+                                players_streams[players_streams.len() - 1 - i]
+                                    .0
+                                    .name
+                                    .clone(),
+                            );
+                        }
+                    } else {
+                        for _ in 0..player_names.len() - players_streams.len() {
+                            player_names.pop();
+                        }
+                    }
+                }
+
+                //Refresh if the names are different
+                for i in 0..players_streams.len() {
+                    if players_streams[i].0.name != player_names[i] {
+                        player_names.push(players_streams[i].0.name.clone());
+                        player_names.swap_remove(i);
+                        announce_top_left("Players updated".to_string(), 0);
+                        refresh = true;
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(100));
             }
         }
         1 => {
@@ -49,7 +89,7 @@ fn main() {
 
             let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
             if start_game == 1 {
-                client.send("gamestart:".to_string());
+                client.send("gamestart\0".to_string());
             }
         }
         _ => {}

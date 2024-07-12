@@ -1,14 +1,18 @@
 use crate::card;
 use crate::hand;
 use crate::play;
+use crate::player;
 
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::style::SetForegroundColor;
 use crossterm::{
     cursor, execute, queue,
     style::{self, Color, Stylize},
     terminal,
 };
+use std::io::stdout;
 use std::io::{self, Write};
+use std::net::TcpStream;
 use std::time::Duration;
 
 pub fn init() {
@@ -102,6 +106,49 @@ pub fn player_note(a: String, height: u16) {
         style::PrintStyledContent(a.red())
     );
     io::stdout().flush();
+}
+
+pub fn show_server_status(players_streams: &Vec<(player::Player, TcpStream)>) {
+    for i in terminal::size().unwrap().0 / 3..(terminal::size().unwrap().0 * 2) / 3 {
+        for j in terminal::size().unwrap().1 / 3..terminal::size().unwrap().1 * 2 / 3 {
+            queue!(
+                io::stdout(),
+                cursor::MoveTo(i, j),
+                style::SetBackgroundColor(Color::Black),
+                style::Print(" ".to_string())
+            );
+        }
+    }
+
+    if players_streams.is_empty() {
+        return;
+    }
+
+    queue!(
+        io::stdout(),
+        cursor::MoveTo(
+            (terminal::size().unwrap().0) / 3 + 2,
+            terminal::size().unwrap().1 / 3 + 2
+        ),
+    );
+
+    for player in players_streams {
+        queue!(
+            io::stdout(),
+            cursor::SavePosition,
+            SetForegroundColor(Color::White)
+        );
+        let name = &player.0.name;
+        let ip = &player.1.peer_addr().unwrap();
+        queue!(
+            io::stdout(),
+            style::Print(format!("{name} - {ip}")),
+            cursor::RestorePosition,
+            cursor::MoveDown(1),
+        );
+    }
+
+    stdout().flush();
 }
 
 pub fn show_play(p: Option<&play::Play>) {
