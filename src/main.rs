@@ -33,6 +33,7 @@ fn main() {
 
             loop {
                 if server.listener_thread.as_ref().unwrap().is_finished() {
+                    display::announce("Starting game.".to_string());
                     break;
                 }
                 let players_streams = server.players_streams.lock().unwrap();
@@ -71,25 +72,43 @@ fn main() {
                     }
                 }
 
+                drop(players_streams);
+
                 thread::sleep(Duration::from_millis(100));
             }
+            println!("starting...");
         }
         1 => {
-            let mut name: String;
+            let mut client: Result<client::Client, &'static str>;
             loop {
-                name = input_string("What is your name?".to_string());
-                if !name.contains('/') {
-                    break;
+                let mut name: String;
+                loop {
+                    name = input_string("What is your name?".to_string());
+                    if !name.contains('/') {
+                        break;
+                    }
+                    println!("Username cannot contain \"/\". Please try again.")
                 }
-                println!("Username cannot contain \"/\". Please try again.")
+
+                let ip_string = input_string("What IP would you like to connect to?".to_string());
+                client = client::Client::new(ip_string.parse().unwrap(), name.clone());
+                match client {
+                    Err(e) => {
+                        println!("Connection failed. {}", e);
+                    }
+                    _ => {
+                        println!("Connection successful.");
+                        break;
+                    }
+                }
             }
-            let ip_string = input_string("What IP would you like to connect to?".to_string());
-            let mut client = client::Client::new(ip_string.parse().unwrap());
-            client.send(format!("name:{name}\0"));
+
+            // Shadow client with actual client since not errored.
+            let mut client = client.unwrap();
 
             let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
             if start_game == 1 {
-                client.send("gamestart\0".to_string());
+                client.send("stop\0".to_string());
             }
         }
         _ => {}
