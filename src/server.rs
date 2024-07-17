@@ -1,23 +1,27 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::{display, player};
+use crate::display::Display;
+use crate::player;
 
 pub struct Server {
-    pub players_streams: Arc<Mutex<Vec<(player::Player, TcpStream)>>>,
+    pub player_network: Arc<Mutex<Vec<(player::Player, TcpStream, Instant)>>>,
     pub listener_thread: Option<thread::JoinHandle<()>>,
-    pub data_thread: Option<thread::JoinHandle<()>>,
+    pub running: Arc<Mutex<bool>>,
+    pub display: Arc<Mutex<Display>>,
 }
 
 impl Server {
     pub fn new() -> Self {
+        let display = Arc::new(Mutex::new(Display::new()));
         Self {
-            players_streams: Arc::new(Mutex::new(Vec::new())),
+            player_network: Arc::new(Mutex::new(Vec::new())),
             listener_thread: None,
-            data_thread: None,
+            running: Arc::new(Mutex::new(true)),
+            display,
         }
     }
 
@@ -25,83 +29,84 @@ impl Server {
     pub fn accept_players(&mut self) {
         // Create listener to listen for any new connections
         let listener = TcpListener::bind("127.0.0.1:9141").unwrap();
+        listener.set_nonblocking(true).unwrap();
 
-        let (stop_tx, stop_rx) = mpsc::channel();
-
-        let players_streams = Arc::clone(&self.players_streams);
+        let players_streams = Arc::clone(&self.player_network);
+        let running = Arc::clone(&self.running);
+        let display = Arc::clone(&self.display);
 
         // Concurrently run thread in order to receive connections
         self.listener_thread = Some(thread::spawn(move || {
-            'listener: for stream in listener.incoming() {
-                let mut stream = stream.unwrap();
-                let ip = stream.peer_addr().unwrap();
-
-                // println!("incoming connection from {}", ip);
-                display::announce_top_left(format!("Incoming connection from {ip}"), 0);
-
-                if let Ok(stop) = stop_rx.try_recv() {
-                    display::announce_top_left(format!("Stop message received"), 8);
-                    if stop {
-                        break;
-                    }
-                }
-
-                display::announce_top_left(format!("No internal stop command"), 2);
-                // println!("No internal stop command");
-
+            while *running.lock().unwrap() {
                 let mut players = players_streams.lock().unwrap();
+                let mut display = display.lock().unwrap();
 
-                display::announce_top_left(format!("Obtained players_streams lock"), 3);
-                // println!("lock obtained");
-
-                display::announce_top_left(format!("Validating player"), 1);
-                // println!("validating player");
-
-                if let Some(user_name) = validate_player(&stream) {
-                    if players.iter().any(|p| p.0.name == user_name) {
-                        display::announce_top_left(
-                            format!("Player attempted with duplicate name {user_name}"),
-                            1,
+                match listener.accept() {
+                    Ok((mut stream, addr)) => {
+                        // println!("incoming connection from {}", addr);
+                        display.log(
+                            format!("Incoming connection from {addr}"),
+                            Duration::new(0, 0),
                         );
-                        // println!("Player attempted with duplicate name {}", user_name);
-                        stream.write(&format!("err:name").as_bytes());
-                        stream.shutdown(std::net::Shutdown::Both);
-                        continue 'listener;
+                        if let Some(user_name) = validate_player(&stream) {
+                            if players.iter().any(|p| p.0.name == user_name) {
+                                display.log(
+                                    format!("Player attempted with duplicate name {user_name}"),
+                                    Duration::new(0, 0),
+                                );
+                                // println!("Player attempted with duplicate name {}", user_name);
+                                stream.write(&format!("err:name").as_bytes());
+                                stream.shutdown(std::net::Shutdown::Both);
+                                continue;
+                            }
+                            stream.write(&format!("connected").as_bytes());
+
+                            display.log(
+                                format!("Player {user_name} connected from {addr}"),
+                                Duration::new(0, 0),
+                            );
+                            // println!("Player connected");
+                            let player = player::Player::new(user_name);
+                            players.push((player, stream, Instant::now()));
+                        }
                     }
-                    stream.write(&format!("connected").as_bytes());
-
-                    display::announce_top_left(
-                        format!("Player {user_name} connected from {ip}"),
-                        2,
-                    );
-                    // println!("Player connected");
-                    let player = player::Player::new(user_name);
-                    players.push((player, stream));
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => eprint!("Error accepting connection: {}", e),
                 }
-            }
-        }));
 
-        let players_streams2 = Arc::clone(&self.players_streams);
+                for player in players.iter_mut() {
+                    let mut buf_reader = BufReader::new(&player.1);
 
-        self.data_thread = Some(thread::spawn(move || loop {
-            let players_streams = players_streams2.lock().unwrap();
-            for player in &*players_streams {
-                let mut buf_reader = BufReader::new(&player.1);
-
-                let mut data = Vec::new();
-
-                buf_reader.read_until(b'\0', &mut data);
-
-                let data = String::from_utf8(data).expect("Invalid signal");
-
-                if data.contains("stop") {
-                    stop_tx.send(true);
-
-                    //connect to itself in order to unblock listener loop
-                    TcpStream::connect("127.0.0.1:9142");
-                } else {
-                    display::announce_top_left("Craziness".to_string(), 7);
+                    let mut data = Vec::new();
+                    if let Some(_) = buf_reader.read_until(b'\0', &mut data).ok() {
+                        match std::str::from_utf8(&data) {
+                            Ok("ok\0") => {
+                                player.2 = Instant::now(); //Update last connected time
+                            }
+                            Ok("stop\0") => {
+                                *running.lock().unwrap() = false;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
+
+                // Remove inactive players
+                players.retain(|(player, stream, last_active)| {
+                    if last_active.elapsed().as_secs() > 20 {
+                        let user_name = &player.name;
+                        display.log(
+                            format!("Removing player {user_name} due to inactivity."),
+                            Duration::new(0, 0),
+                        );
+                        stream.shutdown(std::net::Shutdown::Both).ok(); // Gracefully close the connection
+                        false // Remove this player
+                    } else {
+                        true // Keep this player
+                    }
+                });
+
+                display.show_logs();
             }
         }));
     }

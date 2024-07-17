@@ -10,10 +10,86 @@ use crossterm::{
     style::{self, Color, Stylize},
     terminal,
 };
+use std::collections::VecDeque;
 use std::io::stdout;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::time::Duration;
+use std::time::Instant;
+
+pub struct Display {
+    log_queue: VecDeque<(String, Instant, Duration)>,
+    new_log: bool,
+}
+
+impl Display {
+    pub fn new() -> Self {
+        terminal::enable_raw_mode();
+        queue!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide);
+        io::stdout().flush();
+        Self {
+            log_queue: VecDeque::new(),
+            new_log: false,
+        }
+    }
+
+    pub fn log(&mut self, s: String, timeout: Duration) {
+        self.log_queue.push_back((s, Instant::now(), timeout));
+        self.new_log = true;
+    }
+
+    pub fn show_logs(&mut self) {
+        let old_logs = self.log_queue.clone();
+
+        // Remove timed out logs
+        self.log_queue.retain(|(_, instant, timeout)| {
+            timeout.is_zero() || Instant::now().duration_since(*instant).lt(timeout)
+        });
+
+        if self.new_log || !old_logs.iter().all(|item| self.log_queue.contains(item)) {
+            let log_width = terminal::size().unwrap().0 / 3 - 4;
+            // Clear background
+            queue!(io::stdout(), style::SetBackgroundColor(style::Color::Black),);
+            for i in 0..log_width {
+                for j in 0..10 {
+                    queue!(
+                        io::stdout(),
+                        cursor::MoveTo(2 + i, 2 + j),
+                        style::Print(" ")
+                    );
+                }
+            }
+            let mut height = 0;
+            for log in self.log_queue.iter_mut() {
+                let log_height = log.0.len() as u16 / log_width;
+                if height + log_height < 10 {
+                    for i in 0..log_height + 1 {
+                        let line = log
+                            .0
+                            .split_at((log_width * i).into())
+                            .1
+                            .split_at(if i == log_height {
+                                log.0.len() % log_width as usize
+                            } else {
+                                (log_width).into()
+                            })
+                            .0;
+
+                        queue!(
+                            io::stdout(),
+                            cursor::MoveTo(2, 2 + height),
+                            style::SetBackgroundColor(style::Color::Black),
+                            style::PrintStyledContent(line.green())
+                        );
+                        height += 1;
+                    }
+                }
+            }
+            io::stdout().flush();
+            self.new_log = false;
+        }
+    }
+}
 
 pub fn init() {
     terminal::enable_raw_mode();
@@ -108,7 +184,7 @@ pub fn player_note(a: String, height: u16) {
     io::stdout().flush();
 }
 
-pub fn show_server_status(players_streams: &Vec<(player::Player, TcpStream)>) {
+pub fn show_server_status(players_streams: &Vec<(player::Player, TcpStream, Instant)>) {
     for i in terminal::size().unwrap().0 / 3..(terminal::size().unwrap().0 * 2) / 3 {
         for j in terminal::size().unwrap().1 / 3..terminal::size().unwrap().1 * 2 / 3 {
             queue!(
@@ -139,10 +215,11 @@ pub fn show_server_status(players_streams: &Vec<(player::Player, TcpStream)>) {
             SetForegroundColor(Color::White)
         );
         let name = &player.0.name;
-        let ip = &player.1.peer_addr().unwrap();
+        let ip = &player.1.peer_addr().unwrap_or("0.0.0.0:0".parse().unwrap());
+        let time = &player.2.elapsed().as_millis();
         queue!(
             io::stdout(),
-            style::Print(format!("{name} - {ip}")),
+            style::Print(format!("{name} - {ip} - {time}ms")),
             cursor::RestorePosition,
             cursor::MoveDown(1),
         );

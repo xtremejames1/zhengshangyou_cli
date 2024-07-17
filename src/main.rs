@@ -9,7 +9,12 @@ pub mod player;
 pub mod round;
 pub mod server;
 
-use std::{collections::VecDeque, num::IntErrorKind, thread, time::Duration};
+use std::{
+    collections::VecDeque,
+    num::IntErrorKind,
+    thread,
+    time::{Duration, Instant, SystemTime},
+};
 
 use display::announce_top_left;
 
@@ -31,12 +36,14 @@ fn main() {
             let mut player_names: Vec<String> = Vec::new();
             let mut refresh = true;
 
+            let start_time = Instant::now();
+
             loop {
                 if server.listener_thread.as_ref().unwrap().is_finished() {
                     display::announce("Starting game.".to_string());
                     break;
                 }
-                let players_streams = server.players_streams.lock().unwrap();
+                let players_streams = server.player_network.lock().unwrap();
 
                 if refresh {
                     display::show_server_status(&players_streams);
@@ -72,11 +79,17 @@ fn main() {
                     }
                 }
 
+                // Refresh every second
+                if start_time.elapsed().as_millis() % 1000 < 120 {
+                    refresh = true;
+                }
+
                 drop(players_streams);
 
                 thread::sleep(Duration::from_millis(100));
             }
-            println!("starting...");
+            let players_streams = server.player_network.lock().unwrap();
+            let deck = deck::Deck::new((players_streams.len() / 4 + 1).try_into().unwrap());
         }
         1 => {
             let mut client: Result<client::Client, &'static str>;
