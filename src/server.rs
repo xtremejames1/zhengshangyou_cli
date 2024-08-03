@@ -4,24 +4,24 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::display::Display;
+use crate::display::Renderable;
+use crate::logger::Logger;
 use crate::player;
 
 pub struct Server {
     pub player_network: Arc<Mutex<Vec<(player::Player, TcpStream, Instant)>>>,
     pub listener_thread: Option<thread::JoinHandle<()>>,
     pub running: Arc<Mutex<bool>>,
-    pub display: Arc<Mutex<Display>>,
+    pub logger: Arc<Mutex<dyn Renderable>>,
 }
 
 impl Server {
-    pub fn new() -> Self {
-        let display = Arc::new(Mutex::new(Display::new()));
+    pub fn new(logger: Arc<Mutex<dyn Renderable>>) -> Self {
         Self {
             player_network: Arc::new(Mutex::new(Vec::new())),
             listener_thread: None,
             running: Arc::new(Mutex::new(true)),
-            display,
+            logger,
         }
     }
 
@@ -33,24 +33,24 @@ impl Server {
 
         let players_streams = Arc::clone(&self.player_network);
         let running = Arc::clone(&self.running);
-        let display = Arc::clone(&self.display);
+        let logger = Arc::clone(&self.logger);
 
         // Concurrently run thread in order to receive connections
         self.listener_thread = Some(thread::spawn(move || {
             while *running.lock().unwrap() {
                 let mut players = players_streams.lock().unwrap();
-                let mut display = display.lock().unwrap();
+                let mut logger = logger.lock().unwrap();
 
                 match listener.accept() {
                     Ok((mut stream, addr)) => {
                         // println!("incoming connection from {}", addr);
-                        display.log(
+                        logger.as_any().downcast_mut::<Logger>().unwrap().log(
                             format!("Incoming connection from {addr}"),
                             Duration::new(0, 0),
                         );
                         if let Some(user_name) = validate_player(&stream) {
                             if players.iter().any(|p| p.0.name == user_name) {
-                                display.log(
+                                logger.as_any().downcast_mut::<Logger>().unwrap().log(
                                     format!("Player attempted with duplicate name {user_name}"),
                                     Duration::new(0, 0),
                                 );
@@ -61,7 +61,7 @@ impl Server {
                             }
                             stream.write(&format!("connected").as_bytes());
 
-                            display.log(
+                            logger.as_any().downcast_mut::<Logger>().unwrap().log(
                                 format!("Player {user_name} connected from {addr}"),
                                 Duration::new(0, 0),
                             );
@@ -95,7 +95,7 @@ impl Server {
                 players.retain(|(player, stream, last_active)| {
                     if last_active.elapsed().as_secs() > 20 {
                         let user_name = &player.name;
-                        display.log(
+                        logger.as_any().downcast_mut::<Logger>().unwrap().log(
                             format!("Removing player {user_name} due to inactivity."),
                             Duration::new(0, 0),
                         );
@@ -105,8 +105,6 @@ impl Server {
                         true // Keep this player
                     }
                 });
-
-                display.show_logs();
             }
         }));
     }

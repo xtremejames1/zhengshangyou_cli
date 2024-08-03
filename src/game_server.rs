@@ -1,24 +1,33 @@
 use crate::card;
 use crate::deck;
 use crate::display;
+use crate::logger::Logger;
 use crate::play;
-use crate::player;
+use crate::player::Player;
 use crate::round;
 use std::collections::VecDeque;
+use std::net::TcpStream;
+use std::time::Duration;
 
-pub struct Game {
-    pub players: VecDeque<player::Player>,
+pub struct GameServer {
+    pub players_streams: VecDeque<(Player, TcpStream)>,
     pub rounds: Vec<round::Round>,
     pub deck: deck::Deck,
+    pub logger: Logger,
 }
 
-impl Game {
-    pub fn new(players: VecDeque<player::Player>, deck: deck::Deck) -> Self {
+impl GameServer {
+    pub fn new(
+        players_streams: VecDeque<(Player, TcpStream)>,
+        deck: deck::Deck,
+        logger: Logger,
+    ) -> Self {
         let rounds = Vec::new();
         Self {
-            players,
+            players_streams,
             rounds,
             deck,
+            logger,
         }
     }
 
@@ -28,7 +37,10 @@ impl Game {
             let winner = self.play_round();
             if !winner.is_none() {
                 let winner_name = winner.unwrap().name;
-                display::announce(format!("The winner is {winner_name}. Congratulations"));
+                self.logger.log(
+                    format!("The winner is {winner_name}. Congratulations"),
+                    Duration::ZERO,
+                );
                 break;
             }
         }
@@ -36,11 +48,11 @@ impl Game {
 
     pub fn deal_cards(&mut self) {
         // pick random player to start, give them a 3 of hearts as standard in the game
-        let index = (rand::random::<f32>() * self.players.len() as f32).floor() as usize;
+        let index = (rand::random::<f32>() * self.players_streams.len() as f32).floor() as usize;
 
         self.deck.sort();
 
-        self.players[index].hand.add_card(
+        self.players_streams[index].0.hand.add_card(
             self.deck.cards.remove(
                 self.deck
                     .cards
@@ -49,22 +61,25 @@ impl Game {
             ),
         );
 
-        let first_player_name = &self.players[index].name;
-        display::announce(format!("{first_player_name} will start first."));
+        let first_player_name = &self.players_streams[index].0.name;
+        self.logger.log(
+            format!("{first_player_name} will start first."),
+            Duration::ZERO,
+        );
 
         // Ensure first player is last when distributing cards to balance hand size
-        for _ in index..self.players.len() - 1 {
+        for _ in index..self.players_streams.len() - 1 {
             let last_player = self
-                .players
+                .players_streams
                 .pop_front()
                 .expect("Should have at least one player");
 
-            self.players.insert(0, last_player);
+            self.players_streams.insert(0, last_player);
         }
 
         // deal the rest of the cards
         while !self.deck.is_empty() {
-            for player in &mut self.players {
+            for (player, _) in &mut self.players_streams {
                 if self.deck.is_empty() {
                     break;
                 }
@@ -75,30 +90,26 @@ impl Game {
 
         //After dealing, put first_player in the first position
         let last_player = self
-            .players
+            .players_streams
             .pop_front()
             .expect("Should have at least one player");
 
-        self.players.insert(0, last_player);
+        self.players_streams.insert(0, last_player);
     }
 
-    pub fn play_round(&mut self) -> Option<player::Player> {
+    pub fn play_round(&mut self) -> Option<Player> {
         //Optionally return a winner
         let mut round = round::Round::new(); //Initialize new round
-        let mut active_player: &player::Player; // Sets active player as first player in list.
+        let mut active_player: &Player; // Sets active player as first player in list.
 
         'round: loop {
             // loop until everybody skips
-            for player in &mut self.players {
+            for (player, stream) in &mut self.players_streams {
                 active_player = &*player;
                 // If everyone besides the last play has skipped their turn, end round
                 if !round.plays.is_empty() && active_player == &round.plays.last().unwrap().player {
                     break 'round;
                 }
-
-                display::announce_top_left(format!("Current Player: {0}", player.name), 0);
-                display::announce_top_left(format!("Current Move Class: "), 1);
-                display::announce(format!("{0}'s turn.'", player.name));
 
                 let hand_size = player.hand.cards.len();
                 let mut selected = vec![false; hand_size]; // array to represent card selection
@@ -200,17 +211,18 @@ impl Game {
 
         let winner = &round.plays.last().unwrap().player;
         let winner_name = &winner.name;
-        display::announce(format!(
-            "{winner_name} won the round. They will start the next round."
-        ));
+        self.logger.log(
+            format!("{winner_name} won the round. They will start the next round."),
+            Duration::ZERO,
+        );
 
-        while self.players.front() != Some(&round.plays.last().unwrap().player) {
+        while self.players_streams.front().unwrap().0 != round.plays.last().unwrap().player {
             let last_player = self
-                .players
+                .players_streams
                 .pop_front()
                 .expect("Should have at least one player");
 
-            self.players.push_back(last_player);
+            self.players_streams.push_back(last_player);
         }
 
         self.rounds.push(round);

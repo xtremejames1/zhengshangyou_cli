@@ -3,6 +3,7 @@ use crate::hand;
 use crate::play;
 use crate::player;
 
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::style::SetForegroundColor;
 use crossterm::{
@@ -10,100 +11,243 @@ use crossterm::{
     style::{self, Color, Stylize},
     terminal,
 };
+use std::any::Any;
 use std::collections::VecDeque;
 use std::io::stdout;
 use std::io::{self, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+pub trait Renderable: Any + Send {
+    fn render_init(&self) -> Result<(), &'static str>;
+    fn render_update(&mut self) -> Result<(), &'static str> {
+        Ok(())
+    }
+    fn as_any(&mut self) -> &mut dyn Any;
+    // Whether the renderable should be destroyed
+    fn destroy(&mut self) -> bool {
+        false
+    }
+}
+
 pub struct Display {
-    log_queue: VecDeque<(String, Instant, Duration)>,
-    new_log: bool,
+    pub renderables: VecDeque<Arc<Mutex<dyn Renderable>>>,
 }
 
 impl Display {
     pub fn new() -> Self {
-        terminal::enable_raw_mode();
-        queue!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide);
-        io::stdout().flush();
+        terminal::enable_raw_mode().expect("Failed to enable raw_mode");
+        queue!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
+            .expect("Failed creating new display");
+        io::stdout().flush().expect("Failed to write to stdout");
         Self {
-            log_queue: VecDeque::new(),
-            new_log: false,
+            renderables: VecDeque::new(),
         }
     }
 
-    pub fn log(&mut self, s: String, timeout: Duration) {
-        self.log_queue.push_back((s, Instant::now(), timeout));
-        self.new_log = true;
+    pub fn add_renderable(&mut self, r: Arc<Mutex<dyn Renderable>>) {
+        r.lock()
+            .unwrap()
+            .render_init()
+            .expect("Initializing renderable failed");
+        self.renderables.push_back(r);
     }
 
-    pub fn show_logs(&mut self) {
-        let old_logs = self.log_queue.clone();
-
-        // Remove timed out logs
-        self.log_queue.retain(|(_, instant, timeout)| {
-            timeout.is_zero() || Instant::now().duration_since(*instant).lt(timeout)
-        });
-
-        if self.new_log || !old_logs.iter().all(|item| self.log_queue.contains(item)) {
-            let log_width = terminal::size().unwrap().0 / 3 - 4;
-            // Clear background
-            queue!(io::stdout(), style::SetBackgroundColor(style::Color::Black),);
-            for i in 0..log_width {
-                for j in 0..10 {
-                    queue!(
-                        io::stdout(),
-                        cursor::MoveTo(2 + i, 2 + j),
-                        style::Print(" ")
-                    );
-                }
-            }
-            let mut height = 0;
-            for log in self.log_queue.iter_mut() {
-                let log_height = log.0.len() as u16 / log_width;
-                if height + log_height < 10 {
-                    for i in 0..log_height + 1 {
-                        let line = log
-                            .0
-                            .split_at((log_width * i).into())
-                            .1
-                            .split_at(if i == log_height {
-                                log.0.len() % log_width as usize
-                            } else {
-                                (log_width).into()
-                            })
-                            .0;
-
-                        queue!(
-                            io::stdout(),
-                            cursor::MoveTo(2, 2 + height),
-                            style::SetBackgroundColor(style::Color::Black),
-                            style::PrintStyledContent(line.green())
-                        );
-                        height += 1;
-                    }
-                }
-            }
-            io::stdout().flush();
-            self.new_log = false;
+    pub fn update(&mut self) {
+        // Remove all renderables which need to be destroyed
+        self.renderables
+            .retain(|renderable| !renderable.lock().unwrap().destroy());
+        for renderable in &self.renderables {
+            renderable
+                .lock()
+                .unwrap()
+                .render_update()
+                .expect("Rendering renderable failed");
         }
     }
 }
 
-pub fn init() {
-    terminal::enable_raw_mode();
-    queue!(
-        io::stdout(),
-        terminal::EnterAlternateScreen,
-        style::SetBackgroundColor(style::Color::DarkGreen),
-        cursor::Hide
-    );
-    io::stdout().flush();
+pub struct InputBox {
+    prompt: String,
+    cursor: usize,
+    current_input: String,
+    pub output: Option<String>,
+}
+
+impl InputBox {
+    //todo create thread that reads input when selected
+
+    pub fn new<T>(prompt: T) -> Self
+    where
+        T: Into<String>,
+    {
+        let prompt = prompt.into();
+        Self {
+            current_input: String::new(),
+            cursor: 0,
+            prompt,
+            output: None,
+        }
+    }
+}
+
+impl Renderable for InputBox {
+    fn render_init(&self) -> Result<(), &'static str> {
+        let mut top_border = "╭".to_string();
+        let mut bottom_border = "╰".to_string();
+        let mut middle = String::new();
+        for _ in 0..terminal::size().unwrap().0 / 2 - 2 {
+            top_border.push_str("─");
+            bottom_border.push_str("─");
+            middle.push_str(" ");
+        }
+        top_border.push_str("╮");
+        bottom_border.push_str("╯");
+        queue!(
+            io::stdout(),
+            style::SetBackgroundColor(Color::Black),
+            style::SetForegroundColor(Color::White),
+            cursor::MoveTo(
+                terminal::size().unwrap().0 / 4,
+                terminal::size().unwrap().1 / 2 - 1
+            ),
+            style::Print(top_border),
+            cursor::MoveTo(
+                terminal::size().unwrap().0 / 4 + 1,
+                terminal::size().unwrap().1 / 2
+            ),
+            style::Print(middle),
+            cursor::MoveTo(
+                terminal::size().unwrap().0 / 4,
+                terminal::size().unwrap().1 / 2 + 1
+            ),
+            style::Print(bottom_border),
+            cursor::MoveTo(
+                terminal::size().unwrap().0 / 4,
+                terminal::size().unwrap().1 / 2
+            ),
+            style::Print("│"),
+            cursor::MoveTo(
+                terminal::size().unwrap().0 * 3 / 4 - 1,
+                terminal::size().unwrap().1 / 2
+            ),
+            style::Print("│"),
+            cursor::MoveTo(
+                ((terminal::size().unwrap().0 as usize - &self.prompt.len()) / 2)
+                    .try_into()
+                    .unwrap(),
+                terminal::size().unwrap().1 / 2 - 1
+            ),
+            style::Print(&self.prompt),
+            cursor::MoveTo(
+                terminal::size().unwrap().0 / 2,
+                terminal::size().unwrap().1 / 2
+            ),
+            SetCursorStyle::BlinkingBar,
+            cursor::Show,
+        )
+        .expect("Failed to queue io changes");
+        io::stdout().flush().expect("Failed to write to stdout");
+        Ok(())
+    }
+
+    fn render_update(&mut self) -> Result<(), &'static str> {
+        let mut updated = true;
+        //Check keystroke
+        if poll(Duration::from_millis(500)).ok().unwrap() {
+            let event = read();
+            match event {
+                Ok(Event::Key(event)) if event.kind == KeyEventKind::Press => match event.code {
+                    KeyCode::Esc => {
+                        self.output = Some("\0".into());
+                        queue!(io::stdout(), cursor::Hide).expect("Failed to queue io changes");
+                    }
+                    KeyCode::Left => {
+                        if self.cursor != 0 {
+                            self.cursor -= 1;
+                            queue!(io::stdout(), cursor::MoveLeft(1))
+                                .expect("Failed to queue io changes");
+                        }
+                    }
+                    KeyCode::Right => {
+                        if self.cursor != self.current_input.len() {
+                            self.cursor += 1;
+                            queue!(io::stdout(), cursor::MoveRight(1))
+                                .expect("Failed to queue io changes");
+                        }
+                    }
+                    KeyCode::Enter => {
+                        self.output = Some(self.current_input.clone());
+                        queue!(io::stdout(), cursor::Hide).expect("Failed to queue io changes");
+                    }
+                    KeyCode::Backspace => {
+                        if self.cursor > 0 {
+                            self.current_input.remove(self.cursor - 1);
+                            self.cursor -= 1;
+                            queue!(io::stdout(), cursor::MoveLeft(1))
+                                .expect("Failed to queue io changes");
+                        }
+                    }
+                    KeyCode::Char(char) => {
+                        self.current_input.insert(self.cursor, char);
+                        self.cursor += 1;
+                        queue!(io::stdout(), cursor::MoveRight(1))
+                            .expect("Failed to queue io changes");
+                    }
+                    _ => {
+                        updated = false;
+                    }
+                },
+                _ => {
+                    updated = false;
+                }
+            }
+        }
+
+        if updated {
+            let mut middle = String::new();
+            for _ in 0..terminal::size().unwrap().0 / 2 - 2 {
+                middle.push_str(" ");
+            }
+            queue!(
+                io::stdout(),
+                style::SetBackgroundColor(Color::Black),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4 + 1,
+                    terminal::size().unwrap().1 / 2
+                ),
+                style::Print(middle),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4 + 1,
+                    terminal::size().unwrap().1 / 2
+                ),
+                style::Print(&self.current_input),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4 + 1 + self.cursor as u16,
+                    terminal::size().unwrap().1 / 2
+                ),
+            )
+            .expect("Failed to queue io changes");
+            io::stdout().flush().expect("Failed to write to stdout");
+        }
+        Ok(())
+    }
+
+    // Destroy the input box once output is received
+    fn destroy(&mut self) -> bool {
+        self.output.is_some()
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 pub fn get_keystate() -> Input_States {
-    if poll(Duration::from_millis(500)).ok().expect("IDK") {
+    if poll(Duration::from_millis(500)).ok().unwrap() {
         let event = read();
         match event {
             Ok(Event::Key(event)) if event.kind == KeyEventKind::Press => match event.code {
@@ -133,6 +277,49 @@ pub fn get_keystate() -> Input_States {
         }
     }
     Input_States::Empty
+}
+
+pub struct Warning {
+    text: String,
+    timeout: Duration,
+    initial_time: Instant,
+}
+
+impl Warning {
+    pub fn new<T>(text: T, timeout: Duration) -> Self
+    where
+        T: Into<String>,
+    {
+        Self {
+            text: text.into(),
+            timeout,
+            initial_time: Instant::now(),
+        }
+    }
+}
+
+impl Renderable for Warning {
+    fn render_init(&self) -> Result<(), &'static str> {
+        queue!(
+            io::stdout(),
+            cursor::MoveTo(
+                (terminal::size().unwrap().0 - self.text.len() as u16) / 2,
+                terminal::size().unwrap().1 * 3 / 4
+            ),
+            style::SetBackgroundColor(style::Color::DarkRed),
+            style::PrintStyledContent(self.text.clone().white())
+        )
+        .expect("Queueing renderable failed");
+        io::stdout().flush().expect("Writing to stdout failed");
+        Ok(())
+    }
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
+    }
+    //Destroy if expired
+    fn destroy(&mut self) -> bool {
+        self.initial_time.elapsed().lt(&self.timeout)
+    }
 }
 
 pub fn warn(a: String) {

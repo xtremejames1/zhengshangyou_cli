@@ -19,6 +19,6 @@ impl Player {
 
 impl PartialEq for Player {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.hand == other.hand
+        self.name == other.name
     }
 }

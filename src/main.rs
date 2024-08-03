@@ -3,7 +3,9 @@ pub mod client;
 pub mod deck;
 pub mod display;
 pub mod game;
+pub mod game_server;
 pub mod hand;
+pub mod logger;
 pub mod play;
 pub mod player;
 pub mod round;
@@ -11,12 +13,15 @@ pub mod server;
 
 use std::{
     collections::VecDeque,
+    net::IpAddr,
     num::IntErrorKind,
+    sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
-use display::announce_top_left;
+use display::{announce_top_left, Display, InputBox, Renderable};
+use logger::Logger;
 
 fn main() {
     // TODO change this to launch arg
@@ -28,9 +33,10 @@ fn main() {
     match network_type {
         2 => {
             println!("Server started...");
-            display::init();
-            display::announce("Zheng Shang-You Server".to_string());
-            let mut server = server::Server::new();
+            let mut display = Display::new();
+            let logger: Arc<Mutex<dyn Renderable>> = Arc::new(Mutex::new(Logger::new()));
+            display.add_renderable(Arc::clone(&logger));
+            let mut server = server::Server::new(logger);
             server.accept_players();
 
             let mut player_names: Vec<String> = Vec::new();
@@ -47,6 +53,7 @@ fn main() {
 
                 if refresh {
                     display::show_server_status(&players_streams);
+                    display.update();
                     refresh = false;
                 }
 
@@ -93,24 +100,116 @@ fn main() {
         }
         1 => {
             let mut client: Result<client::Client, &'static str>;
+            let mut display = display::Display::new();
+            let logger: Arc<Mutex<dyn Renderable>> = Arc::new(Mutex::new(Logger::new()));
+
+            display.add_renderable(Arc::clone(&logger));
             loop {
                 let mut name: String;
                 loop {
-                    name = input_string("What is your name?".to_string());
+                    let name_input: Arc<Mutex<dyn Renderable>> =
+                        Arc::new(Mutex::new(display::InputBox::new("Name:")));
+                    display.add_renderable(Arc::clone(&name_input));
+
+                    name = loop {
+                        display.update();
+                        if let Some(name) = &name_input
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<InputBox>()
+                            .unwrap()
+                            .output
+                        {
+                            break name.to_string();
+                        }
+                    };
+
                     if !name.contains('/') {
+                        logger
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_mut::<Logger>()
+                            .unwrap()
+                            .log(format!("Welcome {name}"), Duration::new(5, 0));
+
+                        display.update();
                         break;
                     }
-                    println!("Username cannot contain \"/\". Please try again.")
+                    logger
+                        .lock()
+                        .unwrap()
+                        .as_any()
+                        .downcast_mut::<Logger>()
+                        .unwrap()
+                        .log("Invalid name, please try again", Duration::new(5, 0));
+
+                    display.update();
                 }
 
-                let ip_string = input_string("What IP would you like to connect to?".to_string());
+                let mut ip_string: String;
+                loop {
+                    let ip_input: Arc<Mutex<dyn Renderable>> =
+                        Arc::new(Mutex::new(display::InputBox::new("Server IP:")));
+                    display.add_renderable(Arc::clone(&ip_input));
+                    ip_string = loop {
+                        display.update();
+                        if let Some(name) = &ip_input
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<InputBox>()
+                            .unwrap()
+                            .output
+                        {
+                            break name.to_string();
+                        }
+                    };
+                    if ip_string.parse::<IpAddr>().is_ok() {
+                        logger
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_mut::<Logger>()
+                            .unwrap()
+                            .log(
+                                format!("Attempting to connect to {ip_string}"),
+                                Duration::new(5, 0),
+                            );
+
+                        display.update();
+                        break;
+                    }
+                    logger
+                        .lock()
+                        .unwrap()
+                        .as_any()
+                        .downcast_mut::<Logger>()
+                        .unwrap()
+                        .log("Invalid IP, please try again", Duration::new(5, 0));
+
+                    display.update();
+                }
                 client = client::Client::new(ip_string.parse().unwrap(), name.clone());
                 match client {
                     Err(e) => {
-                        println!("Connection failed. {}", e);
+                        logger
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_mut::<Logger>()
+                            .unwrap()
+                            .log(format!("Connection failed. {}", e), Duration::new(10, 0));
                     }
                     _ => {
-                        println!("Connection successful.");
+                        logger
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_mut::<Logger>()
+                            .unwrap()
+                            .log(format!("Connection Successful"), Duration::new(10, 0));
                         break;
                     }
                 }
@@ -119,10 +218,10 @@ fn main() {
             // Shadow client with actual client since not errored.
             let mut client = client.unwrap();
 
-            let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
-            if start_game == 1 {
-                client.send("stop\0".to_string());
-            }
+            // let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
+            // if start_game == 1 {
+            //     client.send("stop\0".to_string());
+            // }
         }
         _ => {}
     }
