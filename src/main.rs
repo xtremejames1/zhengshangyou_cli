@@ -3,6 +3,7 @@ pub mod client;
 pub mod deck;
 pub mod display;
 pub mod game;
+pub mod game_client;
 pub mod game_server;
 pub mod hand;
 pub mod logger;

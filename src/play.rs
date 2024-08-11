@@ -1,5 +1,8 @@
+use core::fmt;
+
 use crate::card;
-use crate::player;
+use crate::card::Card;
+use crate::player::{self, Player};
 
 pub struct Play {
     pub class: Class,
@@ -34,6 +37,33 @@ impl Play {
     fn identify_play(&mut self) {
         self.class = identify_class(&mut self.cards);
         self.rank = identify_rank(&mut self.cards);
+    }
+}
+
+impl Into<String> for Play {
+    fn into(self) -> String {
+        let player_str = self.player.name;
+
+        let mut cards_str = "".to_string();
+        for card in self.cards {
+            cards_str.push_str(&card.to_string());
+        }
+
+        format!("{player_str} {cards_str}")
+    }
+}
+
+impl From<String> for Play {
+    fn from(value: String) -> Self {
+        let mut value = value.split_whitespace();
+        let player_str = value.next().unwrap();
+        let mut cards: Vec<Card> = Vec::new();
+        while let Some(card_str) = value.next() {
+            cards.push(Card::from(card_str.to_string()));
+        }
+        let mut play = Play::new(Player::new(player_str));
+        play.set_cards(cards);
+        play
     }
 }
 
@@ -148,4 +178,10 @@ pub enum Class {
     SingleStraight,
     DoubleStraight,
     TripleStraight,
+}
+
+impl fmt::Display for Class {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }

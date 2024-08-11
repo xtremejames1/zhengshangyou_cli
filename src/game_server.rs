@@ -3,14 +3,16 @@ use crate::deck;
 use crate::display;
 use crate::logger::Logger;
 use crate::play;
+use crate::play::Play;
 use crate::player::Player;
 use crate::round;
+use crate::server::Server;
 use std::collections::VecDeque;
-use std::net::TcpStream;
 use std::time::Duration;
 
 pub struct GameServer {
-    pub players_streams: VecDeque<(Player, TcpStream)>,
+    pub server: Server,
+    pub players_streams: VecDeque<Player>,
     pub rounds: Vec<round::Round>,
     pub deck: deck::Deck,
     pub logger: Logger,
@@ -18,12 +20,14 @@ pub struct GameServer {
 
 impl GameServer {
     pub fn new(
-        players_streams: VecDeque<(Player, TcpStream)>,
+        server: Server,
+        players_streams: VecDeque<Player>,
         deck: deck::Deck,
         logger: Logger,
     ) -> Self {
         let rounds = Vec::new();
         Self {
+            server,
             players_streams,
             rounds,
             deck,
@@ -52,7 +56,7 @@ impl GameServer {
 
         self.deck.sort();
 
-        self.players_streams[index].0.hand.add_card(
+        self.players_streams[index].hand.add_card(
             self.deck.cards.remove(
                 self.deck
                     .cards
@@ -61,7 +65,7 @@ impl GameServer {
             ),
         );
 
-        let first_player_name = &self.players_streams[index].0.name;
+        let first_player_name = &self.players_streams[index].name;
         self.logger.log(
             format!("{first_player_name} will start first."),
             Duration::ZERO,
@@ -79,7 +83,7 @@ impl GameServer {
 
         // deal the rest of the cards
         while !self.deck.is_empty() {
-            for (player, _) in &mut self.players_streams {
+            for player in &mut self.players_streams {
                 if self.deck.is_empty() {
                     break;
                 }
@@ -95,117 +99,42 @@ impl GameServer {
             .expect("Should have at least one player");
 
         self.players_streams.insert(0, last_player);
+
+        //TODO: Send players their cards, also send order of players
     }
 
     pub fn play_round(&mut self) -> Option<Player> {
         //Optionally return a winner
         let mut round = round::Round::new(); //Initialize new round
-        let mut active_player: &Player; // Sets active player as first player in list.
+        self.server.send_all("r\0"); //Send new round to clients
 
         'round: loop {
             // loop until everybody skips
-            for (player, stream) in &mut self.players_streams {
-                active_player = &*player;
+            for player in &self.players_streams {
                 // If everyone besides the last play has skipped their turn, end round
-                if !round.plays.is_empty() && active_player == &round.plays.last().unwrap().player {
+                if !round.plays.is_empty() && &*player == &round.plays.last().unwrap().player {
                     break 'round;
                 }
 
-                let hand_size = player.hand.cards.len();
-                let mut selected = vec![false; hand_size]; // array to represent card selection
-                let mut selector = 0usize; // cursor to create selection
+                // TODO: Add non panicking error handling here
+                self.server.send("m\0", player);
 
-                let mut current_play: Option<play::Class> = Some(play::Class::Invalid);
-                let mut play_rank: Option<card::Rank> = Some(card::Rank::Three);
+                //wait for response here
 
-                display::show_hand(&player.hand, &selected, selector);
+                let play_str = self
+                    .server
+                    .read(player)
+                    .expect("Invalid play sent by player");
+                let play: Play = play_str.clone().into();
 
-                display::show_play(round.plays.last());
-
-                // card selection to be inputted into play
-                loop {
-                    let current_state = display::get_keystate();
-                    match current_state {
-                        display::Input_States::Esc => {
-                            break;
-                        }
-                        display::Input_States::Right => {
-                            selector = (selector + 1) % player.hand.cards.len();
-                        }
-                        display::Input_States::Left => {
-                            selector = ((selector as i16 - 1)
-                                .rem_euclid(player.hand.cards.len() as i16))
-                                as usize;
-                        }
-                        display::Input_States::Space => {
-                            selected[selector] = !selected[selector];
-                        }
-                        display::Input_States::Enter => {
-                            // Play selected play
-                            if current_play == Some(play::Class::Invalid) {
-                                display::warn("Please make a valid move.".to_string());
-                            }
-                            // Allow user to play card if empty round, or valid move
-                            else if round.plays.is_empty()
-                                || (current_play == Some(round.plays.last().unwrap().class)
-                                    && play_rank.unwrap() as usize
-                                        > round.plays.last().unwrap().rank as usize)
-                            {
-                                let mut index = 0usize;
-
-                                // let mut player_move = play::Play::new(active_player.clone());
-                                let mut move_cards = Vec::new();
-
-                                while index < player.hand.cards.len() {
-                                    if selected[index] {
-                                        move_cards.push(player.hand.cards.remove(index));
-                                        selected.remove(index);
-                                    } else {
-                                        index += 1;
-                                    }
-                                }
-                                let mut player_move = play::Play::new(player.clone());
-                                player_move.set_cards(move_cards);
-
-                                round.add_play(player_move);
-                                break;
-                            } else {
-                                display::warn("Invalid move.".to_string());
-                            }
-                        }
-                        _ => {
-                            continue;
-                        }
-                    }
-
-                    // Gather currently selected cards
-                    let mut selected_cards = Vec::new();
-
-                    for i in 0..selected.len() {
-                        if selected[i] {
-                            selected_cards.push(player.hand.cards[i].clone());
-                        }
-                    }
-
-                    // Display the player's hand
-                    display::show_hand(&player.hand, &selected, selector);
-
-                    // Show play state of selected cards
-                    current_play = Some(play::identify_class(&mut selected_cards));
-                    display::player_note(
-                        format!("Current move: {:?}", current_play.as_ref().unwrap()),
-                        1,
-                    );
-                    if current_play != Some(play::Class::Invalid) {
-                        play_rank = Some(play::identify_rank(&mut selected_cards));
-                        display::player_note(format!("Move Rank: {:?}", play_rank.unwrap()), 0);
-                    }
-                }
+                round.plays.push(play);
 
                 // win condition
                 if player.hand.cards.is_empty() {
                     return Some(player.clone());
                 }
+
+                self.server.send_all(format!("p{play_str}\0"));
             }
         }
 
@@ -216,7 +145,7 @@ impl GameServer {
             Duration::ZERO,
         );
 
-        while self.players_streams.front().unwrap().0 != round.plays.last().unwrap().player {
+        while *self.players_streams.front().unwrap() != round.plays.last().unwrap().player {
             let last_player = self
                 .players_streams
                 .pop_front()
@@ -225,6 +154,7 @@ impl GameServer {
             self.players_streams.push_back(last_player);
         }
 
+        self.server.send_all(format!("e\0"));
         self.rounds.push(round);
         None
     }

@@ -1,12 +1,14 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
+use std::str::{from_utf8, Bytes};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::display::Renderable;
 use crate::logger::Logger;
-use crate::player;
+use crate::play::Play;
+use crate::player::{self, Player};
 
 pub struct Server {
     pub player_network: Arc<Mutex<Vec<(player::Player, TcpStream, Instant)>>>,
@@ -55,11 +57,11 @@ impl Server {
                                     Duration::new(0, 0),
                                 );
                                 // println!("Player attempted with duplicate name {}", user_name);
-                                stream.write(&format!("err:name").as_bytes());
+                                stream.write(b"err:name");
                                 stream.shutdown(std::net::Shutdown::Both);
                                 continue;
                             }
-                            stream.write(&format!("connected").as_bytes());
+                            stream.write(b"connected");
 
                             logger.as_any().downcast_mut::<Logger>().unwrap().log(
                                 format!("Player {user_name} connected from {addr}"),
@@ -107,6 +109,65 @@ impl Server {
                 });
             }
         }));
+    }
+    pub fn send_all<T>(&mut self, message: T) -> Result<(), std::io::Error>
+    where
+        T: Into<String>,
+    {
+        let message: String = message.into();
+        let players_streams = self.player_network.lock().unwrap();
+        for (_, stream, _) in players_streams.iter() {
+            let mut writer = BufWriter::new(stream);
+            if let Err(e) = writeln!(writer, "{}", message) {
+                eprintln!("Failed to send message: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn send<T, U>(&mut self, message: T, target_player: U) -> Result<(), std::io::Error>
+    where
+        T: Into<String>,
+        U: AsRef<Player>,
+    {
+        let message: String = message.into();
+        let players_streams = self.player_network.lock().unwrap();
+
+        if let Some((_, stream, _)) = players_streams
+            .iter()
+            .find(|(player, _, _)| player == target_player.as_ref())
+        {
+            let mut writer = BufWriter::new(stream);
+            writeln!(writer, "{}", message)?;
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Player not found",
+            ))
+        }
+    }
+
+    pub fn read<T>(&mut self, target_player: T) -> Result<String, std::io::Error>
+    where
+        T: AsRef<Player>,
+    {
+        let players_streams = self.player_network.lock().unwrap();
+        if let Some((_, stream, _)) = players_streams
+            .iter()
+            .find(|(player, _, _)| player == target_player.as_ref())
+        {
+            let mut buf_reader = BufReader::new(stream);
+
+            let mut data = Vec::new();
+            buf_reader.read_until(b'\0', &mut data)?;
+            Ok(from_utf8(&data).unwrap().to_string())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Player not found",
+            ))
+        }
     }
 }
 

@@ -14,3 +14,9 @@ impl Round {
         self.plays.push(play);
     }
 }
+
+impl AsMut<Round> for Round {
+    fn as_mut(&mut self) -> &mut Round {
+        self
+    }
+}
