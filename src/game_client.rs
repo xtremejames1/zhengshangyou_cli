@@ -1,29 +1,33 @@
 use crate::card;
 use crate::client::Client;
-use crate::display;
+use crate::display::Display;
+use crate::display::{self, Warning};
 use crate::logger::Logger;
 use crate::play;
-use crate::player;
 use crate::player::Player;
+use crate::player_client::PlayerClient;
 use crate::round;
 use crate::round::Round;
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub struct Game {
+pub struct GameClient {
     pub player: Player,
     pub client: Client,
-    pub players: VecDeque<player::Player>,
+    pub players: VecDeque<PlayerClient>,
     pub rounds: Vec<round::Round>,
-    pub logger: Logger,
+    pub logger: Arc<Mutex<Logger>>,
+    pub display: Display,
 }
 
-impl Game {
+impl GameClient {
     pub fn new(
         player: Player,
         client: Client,
-        players: VecDeque<player::Player>,
-        logger: Logger,
+        players: VecDeque<PlayerClient>,
+        logger: Arc<Mutex<Logger>>,
+        display: Display,
     ) -> Self {
         let rounds = Vec::new();
         Self {
@@ -32,6 +36,24 @@ impl Game {
             players,
             rounds,
             logger,
+            display,
+        }
+    }
+
+    //TODO: Use input box as parameter maybe so that player can send start signal
+    pub fn wait_for_start(&mut self) {
+        loop {
+            let incoming_message = self.client.read().unwrap();
+            match incoming_message.as_str() {
+                "s\0" => {
+                    self.logger
+                        .lock()
+                        .unwrap()
+                        .log("Game started", Duration::ZERO);
+                    self.play();
+                }
+                _ => {}
+            }
         }
     }
 
@@ -68,7 +90,7 @@ impl Game {
 
         let winner = &round.plays.last().unwrap().player;
         let winner_name = &winner.name;
-        self.logger.log(
+        self.logger.lock().unwrap().log(
             format!("{winner_name} won the round. They will start the next round."),
             Duration::ZERO,
         );
@@ -113,7 +135,11 @@ impl Game {
                 display::Input_States::Enter => {
                     // Play selected play
                     if current_play == Some(play::Class::Invalid) {
-                        display::warn("Please make a valid move.".to_string());
+                        self.display
+                            .add_renderable(Arc::new(Mutex::new(Warning::new(
+                                "Please make a valid move.",
+                                Duration::new(5, 0),
+                            ))))
                     }
                     // Allow user to play card if empty round, or valid move
                     else if round.plays.is_empty()
@@ -140,7 +166,11 @@ impl Game {
                         // TODO: Send the move back here
                         break;
                     } else {
-                        display::warn("Invalid move.".to_string());
+                        self.display
+                            .add_renderable(Arc::new(Mutex::new(Warning::new(
+                                "Invalid move.",
+                                Duration::new(5, 0),
+                            ))))
                     }
                 }
                 _ => {

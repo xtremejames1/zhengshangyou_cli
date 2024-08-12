@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::str::{from_utf8, Bytes};
@@ -11,7 +12,7 @@ use crate::play::Play;
 use crate::player::{self, Player};
 
 pub struct Server {
-    pub player_network: Arc<Mutex<Vec<(player::Player, TcpStream, Instant)>>>,
+    pub player_network: Arc<Mutex<VecDeque<(player::Player, TcpStream, Instant)>>>,
     pub listener_thread: Option<thread::JoinHandle<()>>,
     pub running: Arc<Mutex<bool>>,
     pub logger: Arc<Mutex<dyn Renderable>>,
@@ -20,7 +21,7 @@ pub struct Server {
 impl Server {
     pub fn new(logger: Arc<Mutex<dyn Renderable>>) -> Self {
         Self {
-            player_network: Arc::new(Mutex::new(Vec::new())),
+            player_network: Arc::new(Mutex::new(VecDeque::new())),
             listener_thread: None,
             running: Arc::new(Mutex::new(true)),
             logger,
@@ -69,7 +70,7 @@ impl Server {
                             );
                             // println!("Player connected");
                             let player = player::Player::new(user_name);
-                            players.push((player, stream, Instant::now()));
+                            players.push_back((player, stream, Instant::now()));
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -85,7 +86,7 @@ impl Server {
                             Ok("ok\0") => {
                                 player.2 = Instant::now(); //Update last connected time
                             }
-                            Ok("stop\0") => {
+                            Ok("go\0") => {
                                 *running.lock().unwrap() = false;
                             }
                             _ => {}

@@ -5,16 +5,20 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::logger::Logger;
+
 pub struct Client {
     tcp_tx: mpsc::Sender<String>,
     pub tcp_thread: thread::JoinHandle<()>,
     stream: Arc<Mutex<TcpStream>>,
+    logger: Arc<Mutex<Logger>>,
 }
 
 impl Client {
-    pub fn new(ip: IpAddr, name: String) -> Result<Self, &'static str> {
+    pub fn new(ip: IpAddr, name: String, logger: Arc<Mutex<Logger>>) -> Result<Self, &'static str> {
         let stream = Arc::new(Mutex::new(TcpStream::connect((ip, 9141)).unwrap()));
         let mut tcp_stream = stream.lock().unwrap();
+        let logger_new = logger.clone();
 
         tcp_stream.set_nodelay(true);
         tcp_stream
@@ -31,7 +35,10 @@ impl Client {
         if data.contains("err") {
             return Err("Connection error");
         } else {
-            println!("Server response: {}", data)
+            logger_new
+                .lock()
+                .unwrap()
+                .log(format!("Server response: {data}"), Duration::new(5, 0));
         }
 
         let (tcp_tx, tcp_rx) = mpsc::channel();
@@ -42,7 +49,10 @@ impl Client {
             let mut tcp_stream = stream_send_thread.lock().unwrap();
             loop {
                 let message = if let Ok(data) = tcp_rx.try_recv() {
-                    println!("Sent {}", data);
+                    logger_new
+                        .lock()
+                        .unwrap()
+                        .log(format!("Sent: {data}"), Duration::new(5, 0));
                     data
                 } else {
                     "ok\0".to_string()
@@ -57,6 +67,7 @@ impl Client {
             tcp_tx,
             tcp_thread,
             stream: Arc::clone(&stream),
+            logger,
         })
     }
 

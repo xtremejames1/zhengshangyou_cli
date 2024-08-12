@@ -2,13 +2,13 @@ pub mod card;
 pub mod client;
 pub mod deck;
 pub mod display;
-pub mod game;
 pub mod game_client;
 pub mod game_server;
 pub mod hand;
 pub mod logger;
 pub mod play;
 pub mod player;
+pub mod player_client;
 pub mod round;
 pub mod server;
 
@@ -21,8 +21,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use display::{announce_top_left, Display, InputBox, Renderable};
+use display::{announce_top_left, CheckBox, Display, InputBox, Renderable};
+use game_client::GameClient;
+use game_server::GameServer;
 use logger::Logger;
+use player::Player;
 
 fn main() {
     // TODO change this to launch arg
@@ -35,9 +38,9 @@ fn main() {
         2 => {
             println!("Server started...");
             let mut display = Display::new();
-            let logger: Arc<Mutex<dyn Renderable>> = Arc::new(Mutex::new(Logger::new()));
+            let logger = Arc::new(Mutex::new(Logger::new()));
             display.add_renderable(Arc::clone(&logger));
-            let mut server = server::Server::new(logger);
+            let mut server = server::Server::new(logger.clone());
             server.accept_players();
 
             let mut player_names: Vec<String> = Vec::new();
@@ -96,32 +99,33 @@ fn main() {
 
                 thread::sleep(Duration::from_millis(100));
             }
-            let players_streams = server.player_network.lock().unwrap();
-            let deck = deck::Deck::new((players_streams.len() / 4 + 1).try_into().unwrap());
+            let players: VecDeque<Player> = server
+                .player_network
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(first, _, _)| first.clone())
+                .collect();
+            let deck = deck::Deck::new((players.len() / 4 + 1).try_into().unwrap());
+            let game = GameServer::new(server, players, deck, logger);
         }
         1 => {
             let mut client: Result<client::Client, &'static str>;
             let mut display = display::Display::new();
-            let logger: Arc<Mutex<dyn Renderable>> = Arc::new(Mutex::new(Logger::new()));
+            let logger = Arc::new(Mutex::new(Logger::new()));
+            let mut player: player::Player;
 
             display.add_renderable(Arc::clone(&logger));
             loop {
+                let logger = logger.clone();
                 let mut name: String;
                 loop {
-                    let name_input: Arc<Mutex<dyn Renderable>> =
-                        Arc::new(Mutex::new(display::InputBox::new("Name:")));
+                    let name_input = Arc::new(Mutex::new(display::InputBox::new("Name:")));
                     display.add_renderable(Arc::clone(&name_input));
 
                     name = loop {
                         display.update();
-                        if let Some(name) = &name_input
-                            .lock()
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<InputBox>()
-                            .unwrap()
-                            .output
-                        {
+                        if let Some(name) = &name_input.lock().unwrap().output {
                             break name.to_string();
                         }
                     };
@@ -130,11 +134,9 @@ fn main() {
                         logger
                             .lock()
                             .unwrap()
-                            .as_any()
-                            .downcast_mut::<Logger>()
-                            .unwrap()
                             .log(format!("Welcome {name}"), Duration::new(5, 0));
 
+                        player = player::Player::new(name.clone());
                         display.update();
                         break;
                     }
@@ -151,8 +153,7 @@ fn main() {
 
                 let mut ip_string: String;
                 loop {
-                    let ip_input: Arc<Mutex<dyn Renderable>> =
-                        Arc::new(Mutex::new(display::InputBox::new("Server IP:")));
+                    let ip_input = Arc::new(Mutex::new(display::InputBox::new("Server IP:")));
                     display.add_renderable(Arc::clone(&ip_input));
                     ip_string = loop {
                         display.update();
@@ -192,7 +193,8 @@ fn main() {
 
                     display.update();
                 }
-                client = client::Client::new(ip_string.parse().unwrap(), name.clone());
+                client =
+                    client::Client::new(ip_string.parse().unwrap(), name.clone(), logger.clone());
                 match client {
                     Err(e) => {
                         logger
@@ -219,46 +221,54 @@ fn main() {
             // Shadow client with actual client since not errored.
             let mut client = client.unwrap();
 
-            // let start_game = input_u32("Enter 1 to start game".to_string(), "bruh".to_string());
-            // if start_game == 1 {
-            //     client.send("stop\0".to_string());
-            // }
+            let start_game = Arc::new(Mutex::new(CheckBox::new("Ready?")));
+            display.add_renderable(start_game.clone());
+
+            loop {
+                if start_game.lock().unwrap().checked {
+                    client.send("go\0");
+                }
+                display.update();
+            }
+
+            // wait for game start message
+            // let mut game = GameClient::new(player, client, players, logger, display);
         }
         _ => {}
     }
 
-    let num_decks = input_u32(
-        "How many decks would you like to play with?".to_string(),
-        "decks".to_string(),
-    );
-
-    let deck = deck::Deck::new(num_decks);
-
-    let num_players = input_u32(
-        "How many players would you like to play with?".to_string(),
-        "players".to_string(),
-    );
-    println!(
-        "Starting game with {} players and {} decks.",
-        num_players, num_decks
-    );
-
-    let mut players = VecDeque::new();
-    for n in 0u32..num_players {
-        let mut name = String::new();
-
-        println!("Player {}, enter your name :", n + 1u32);
-        std::io::stdin().read_line(&mut name).unwrap();
-
-        players.push_back(player::Player::new(name.trim().to_string()));
-    }
-
-    println!("All players added.");
-
-    let mut game = game::Game::new(players, deck);
-
-    game.start_game();
-    game.end_game();
+    // let num_decks = input_u32(
+    //     "How many decks would you like to play with?".to_string(),
+    //     "decks".to_string(),
+    // );
+    //
+    // let deck = deck::Deck::new(num_decks);
+    //
+    // let num_players = input_u32(
+    //     "How many players would you like to play with?".to_string(),
+    //     "players".to_string(),
+    // );
+    // println!(
+    //     "Starting game with {} players and {} decks.",
+    //     num_players, num_decks
+    // );
+    //
+    // let mut players = VecDeque::new();
+    // for n in 0u32..num_players {
+    //     let mut name = String::new();
+    //
+    //     println!("Player {}, enter your name :", n + 1u32);
+    //     std::io::stdin().read_line(&mut name).unwrap();
+    //
+    //     players.push_back(player::Player::new(name.trim().to_string()));
+    // }
+    //
+    // println!("All players added.");
+    //
+    // let mut game = game::Game::new(players, deck);
+    //
+    // game.start_game();
+    // game.end_game();
 }
 
 fn input_u32(prompt: String, subject: String) -> u32 {

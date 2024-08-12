@@ -48,12 +48,19 @@ impl Display {
         }
     }
 
-    pub fn add_renderable(&mut self, r: Arc<Mutex<dyn Renderable>>) {
-        r.lock()
+    pub fn add_renderable<T>(&mut self, renderable: Arc<Mutex<T>>)
+    where
+        T: Renderable + 'static,
+    {
+        renderable
+            .lock()
             .unwrap()
             .render_init()
             .expect("Initializing renderable failed");
-        self.renderables.push_back(r);
+
+        // Cast Arc<Mutex<T>> to Arc<Mutex<dyn Renderable>>
+        let dyn_renderable: Arc<Mutex<dyn Renderable>> = renderable;
+        self.renderables.push_back(dyn_renderable);
     }
 
     pub fn update(&mut self) {
@@ -67,6 +74,94 @@ impl Display {
                 .render_update()
                 .expect("Rendering renderable failed");
         }
+    }
+}
+
+pub struct CheckBox {
+    prompt: String,
+    pub checked: bool,
+}
+
+impl CheckBox {
+    pub fn new<T>(prompt: T) -> Self
+    where
+        T: Into<String>,
+    {
+        let prompt = prompt.into();
+        Self {
+            prompt,
+            checked: false,
+        }
+    }
+}
+
+impl Renderable for CheckBox {
+    fn render_init(&self) -> Result<(), &'static str> {
+        queue!(
+            io::stdout(),
+            style::SetBackgroundColor(Color::Black),
+            style::SetForegroundColor(Color::White),
+            cursor::MoveTo(
+                ((terminal::size().unwrap().0 as usize - &self.prompt.len()) / 2)
+                    .try_into()
+                    .unwrap(),
+                terminal::size().unwrap().1 / 2 - 1
+            ),
+            style::Print(&self.prompt),
+            cursor::MoveTo(
+                (terminal::size().unwrap().0 / 2).try_into().unwrap(),
+                terminal::size().unwrap().1 / 2
+            ),
+            style::Print(""),
+        )
+        .expect("Failed to queue io changes");
+        io::stdout().flush().expect("Failed to write to stdout");
+        Ok(())
+    }
+
+    fn render_update(&mut self) -> Result<(), &'static str> {
+        let mut updated = true;
+        //Check keystroke
+        if poll(Duration::from_millis(500)).ok().unwrap() {
+            let event = read();
+            match event {
+                Ok(Event::Key(event)) if event.kind == KeyEventKind::Press => match event.code {
+                    KeyCode::Enter => {
+                        self.checked = !self.checked;
+                        queue!(io::stdout(), cursor::Hide).expect("Failed to queue io changes");
+                    }
+                    _ => {
+                        updated = false;
+                    }
+                },
+                _ => {
+                    updated = false;
+                }
+            }
+        }
+
+        if updated {
+            let mut middle = String::new();
+            for _ in 0..terminal::size().unwrap().0 / 2 - 2 {
+                middle.push_str(" ");
+            }
+            queue!(
+                io::stdout(),
+                style::SetBackgroundColor(Color::Black),
+                cursor::MoveTo(
+                    (terminal::size().unwrap().0 / 2).try_into().unwrap(),
+                    terminal::size().unwrap().1 / 2
+                ),
+                style::Print(if self.checked { "󰄲" } else { "" }),
+            )
+            .expect("Failed to queue io changes");
+            io::stdout().flush().expect("Failed to write to stdout");
+        }
+        Ok(())
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
@@ -238,7 +333,46 @@ impl Renderable for InputBox {
 
     // Destroy the input box once output is received
     fn destroy(&mut self) -> bool {
-        self.output.is_some()
+        if self.output.is_some() {
+            let mut top_border = String::new();
+            let mut bottom_border = String::new();
+            let mut middle = String::new();
+            for _ in 0..terminal::size().unwrap().0 / 2 {
+                top_border.push_str(" ");
+                bottom_border.push_str(" ");
+                middle.push_str(" ");
+            }
+            queue!(
+                io::stdout(),
+                cursor::Hide,
+                style::SetBackgroundColor(Color::Black),
+                style::SetForegroundColor(Color::White),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4,
+                    terminal::size().unwrap().1 / 2 - 1
+                ),
+                style::Print(top_border),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4,
+                    terminal::size().unwrap().1 / 2
+                ),
+                style::Print(middle),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4,
+                    terminal::size().unwrap().1 / 2 + 1
+                ),
+                style::Print(bottom_border),
+                cursor::MoveTo(
+                    terminal::size().unwrap().0 / 4,
+                    terminal::size().unwrap().1 / 2
+                ),
+            )
+            .expect("Failed destroying Input Box");
+            io::stdout().flush().expect("Failed to write to stdout");
+
+            return true;
+        }
+        false
     }
 
     fn as_any(&mut self) -> &mut dyn Any {
@@ -322,19 +456,6 @@ impl Renderable for Warning {
     }
 }
 
-pub fn warn(a: String) {
-    queue!(
-        io::stdout(),
-        cursor::MoveTo(
-            (terminal::size().unwrap().0 - a.len() as u16) / 2,
-            terminal::size().unwrap().1 * 3 / 4
-        ),
-        style::SetBackgroundColor(style::Color::DarkRed),
-        style::PrintStyledContent(a.white())
-    );
-    io::stdout().flush();
-}
-
 pub fn announce(a: String) {
     queue!(
         io::stdout(),
@@ -371,7 +492,7 @@ pub fn player_note(a: String, height: u16) {
     io::stdout().flush();
 }
 
-pub fn show_server_status(players_streams: &Vec<(player::Player, TcpStream, Instant)>) {
+pub fn show_server_status(players_streams: &VecDeque<(player::Player, TcpStream, Instant)>) {
     for i in terminal::size().unwrap().0 / 3..(terminal::size().unwrap().0 * 2) / 3 {
         for j in terminal::size().unwrap().1 / 3..terminal::size().unwrap().1 * 2 / 3 {
             queue!(

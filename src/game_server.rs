@@ -8,6 +8,8 @@ use crate::player::Player;
 use crate::round;
 use crate::server::Server;
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub struct GameServer {
@@ -15,7 +17,7 @@ pub struct GameServer {
     pub players_streams: VecDeque<Player>,
     pub rounds: Vec<round::Round>,
     pub deck: deck::Deck,
-    pub logger: Logger,
+    pub logger: Arc<Mutex<Logger>>,
 }
 
 impl GameServer {
@@ -23,7 +25,7 @@ impl GameServer {
         server: Server,
         players_streams: VecDeque<Player>,
         deck: deck::Deck,
-        logger: Logger,
+        logger: Arc<Mutex<Logger>>,
     ) -> Self {
         let rounds = Vec::new();
         Self {
@@ -41,7 +43,7 @@ impl GameServer {
             let winner = self.play_round();
             if !winner.is_none() {
                 let winner_name = winner.unwrap().name;
-                self.logger.log(
+                self.logger.lock().unwrap().log(
                     format!("The winner is {winner_name}. Congratulations"),
                     Duration::ZERO,
                 );
@@ -66,7 +68,7 @@ impl GameServer {
         );
 
         let first_player_name = &self.players_streams[index].name;
-        self.logger.log(
+        self.logger.lock().unwrap().log(
             format!("{first_player_name} will start first."),
             Duration::ZERO,
         );
@@ -117,30 +119,35 @@ impl GameServer {
                 }
 
                 // TODO: Add non panicking error handling here
+
+                // sends move command to player
                 self.server.send("m\0", player);
 
-                //wait for response here
-
+                // read response from player
                 let play_str = self
                     .server
                     .read(player)
                     .expect("Invalid play sent by player");
+
                 let play: Play = play_str.clone().into();
 
                 round.plays.push(play);
 
-                // win condition
+                // win condition, end rounds and announce win
                 if player.hand.cards.is_empty() {
+                    let winner_name = &player.name;
+                    self.server.send_all(format!("w{winner_name}"));
                     return Some(player.clone());
                 }
 
+                // send the players the new play
                 self.server.send_all(format!("p{play_str}\0"));
             }
         }
 
         let winner = &round.plays.last().unwrap().player;
         let winner_name = &winner.name;
-        self.logger.log(
+        self.logger.lock().unwrap().log(
             format!("{winner_name} won the round. They will start the next round."),
             Duration::ZERO,
         );
@@ -154,6 +161,7 @@ impl GameServer {
             self.players_streams.push_back(last_player);
         }
 
+        // send to all players that the round has ended
         self.server.send_all(format!("e\0"));
         self.rounds.push(round);
         None
